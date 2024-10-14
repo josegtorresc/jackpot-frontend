@@ -13,10 +13,10 @@ function App() {
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [showLoginForm, setShowLoginForm] = useState(false);
   const [loginDetails, setLoginDetails] = useState({ idPlayer: '', username: '' });
-  const [loginError, setLoginError] = useState(''); 
+  const [loginError, setLoginError] = useState('');
+  const [betAmount, setBetAmount] = useState(0);
   const audioRef = useRef(null);
-  const [jackpotLevels, setJackpotLevels] = useState({}); 
-
+  const [jackpotLevels, setJackpotLevels] = useState({});
 
   useEffect(() => {
     fetchActiveJackpots();
@@ -31,14 +31,14 @@ function App() {
       const activeJackpots = response.data.filter((jackpot) => jackpot.active);
       const jackpotData = {};
       const jackpotLevelData = {};
-    
+
       activeJackpots.forEach((jackpot) => {
         jackpotData[jackpot.nombre] = jackpot.amount;
-        jackpotLevelData[jackpot.nombre] = jackpot.allowedLevels || []; 
+        jackpotLevelData[jackpot.nombre] = jackpot.allowedLevels || [];
       });
-    
+
       setJackpotAmounts(jackpotData);
-      setJackpotLevels(jackpotLevelData); 
+      setJackpotLevels(jackpotLevelData);
     } catch (error) {
       console.error('Error al obtener los jackpots activos:', error);
     }
@@ -63,14 +63,8 @@ function App() {
       setTotalWon(response.data.balance);
     } catch (error) {
       console.error('Error al obtener el balance del jugador:', error);
-      setTotalWon(0); 
+      setTotalWon(0);
     }
-  };
-
-  const handlePlayerSelection = (e) => {
-    const playerId = e.target.value;
-    const player = players.find((p) => p.idPlayer === playerId);
-    setSelectedPlayer(player);
   };
 
   const handleLoginDetailsChange = (e) => {
@@ -92,31 +86,6 @@ function App() {
       await fetchPlayerBalance(player.idPlayer);
     } else {
       setLoginError('Jugador no encontrado. Por favor, verifica los detalles.');
-    }
-  };
-
-  const createNewPlayer = async () => {
-    const newIdPlayer = uuidv4().slice(0, 6).toUpperCase();
-    const newUsername = `user_${newIdPlayer}`;
-    const newPlayer = {
-      idPlayer: newIdPlayer,
-      username: newUsername,
-      nivel: 'inicial',
-      status: 'Active',
-      balance: 0, 
-    };
-
-    try {
-      await axios.post(
-        'https://jackpot-backend.vercel.app/api/players',
-        newPlayer,
-      );
-      setSelectedPlayer(newPlayer);
-      await fetchPlayerBalance(newIdPlayer); 
-      fetchPlayers();
-      alert('Nuevo jugador creado y logueado automáticamente: ' + newUsername);
-    } catch (error) {
-      console.error('Error al crear un nuevo jugador:', error);
     }
   };
 
@@ -163,48 +132,66 @@ function App() {
     }
   };
 
-  const spinJackpot = async () => {
+  const placeBet = async () => {
     if (!selectedPlayer) {
-      await createNewPlayer();
+      alert('Por favor, inicia sesión antes de realizar una apuesta.');
+      return;
     }
-
-  const playerLevel = selectedPlayer.nivel;
-  const allowedJackpots = Object.entries(jackpotLevels).filter(
-    ([jackpotName, levels]) => levels.includes(playerLevel)
-  ).map(([jackpotName]) => jackpotName);
-
-  if (allowedJackpots.length === 0) {
-    alert('Tu nivel no está autorizado para girar ninguno de los jackpots.');
-    return;
-  }
-
+  
+    if (betAmount <= 0) {
+      alert('Por favor, ingresa un monto de apuesta válido.');
+      return;
+    }
+  
+    const playerLevel = selectedPlayer.nivel;
+    const allowedJackpots = Object.entries(jackpotLevels)
+      .filter(([jackpotName, levels]) => levels.includes(playerLevel))
+      .map(([jackpotName]) => jackpotName);
+  
+    if (allowedJackpots.length === 0) {
+      alert('Tu nivel no está autorizado para girar ninguno de los jackpots.');
+      return;
+    }
+  
     const transactionId = uuidv4();
     const timeZone = getUserTimeZone();
     const timestamp = moment().tz(timeZone).format('YYYY-MM-DD HH:mm:ss');
     const ip = await getIPAddress();
-
+  
     try {
       playJackpotSound();
-      const jackpotKeys = Object.keys(jackpotAmounts);
       const jackpotPromises = allowedJackpots.map((jackpot) =>
         axios.post(
           `https://jackpot-backend.vercel.app/api/spin/${encodeURIComponent(jackpot)}`,
-          { amount: 1, playerLevel }
+          { amount: betAmount, playerLevel }
         )
       );
-      
+  
       const responses = await Promise.all(jackpotPromises);
-
+  
       let totalAmountWon = 0;
       const jackpotsWon = {};
-
+      const contributions = {};
+      let totalContributions = 0;  
+      let totalBetPercentage = 0;
+      let alertMessage = 'Resumen de la apuesta:\n';
+  
       responses.forEach((response, index) => {
-        const jackpotName = jackpotKeys[index];
-        const { amountWon, jackpotAmount, inJackpot } = response.data;
-
+        const jackpotName = allowedJackpots[index];
+        const { amountWon, jackpotAmount, inJackpot, individualContribution, totalBetPercentage: jackpotBetPercentage } = response.data;
+  
         totalAmountWon += parseFloat(amountWon);
         jackpotsWon[jackpotName] = amountWon;
-
+        contributions[jackpotName] = individualContribution;
+        totalContributions += parseFloat(individualContribution);
+        totalBetPercentage += jackpotBetPercentage; 
+  
+        alertMessage += `Jackpot al que se le sumó un porcentaje de la apuesta: ${jackpotName}\n`;
+        alertMessage += `Cantidad de Contribución: $${individualContribution}\n`;
+        if (parseFloat(amountWon) > 0) {
+          alertMessage += `¡Ganaste $${amountWon} en este jackpot!\n`;
+        }
+  
         if (inJackpot) {
           setJackpotAmounts((prevAmounts) => ({
             ...prevAmounts,
@@ -212,56 +199,44 @@ function App() {
           }));
         }
       });
-
+  
+      const remainingAmountForPlayer = betAmount - totalContributions;  
       const updatedTotalWon = totalWon + totalAmountWon;
       setTotalWon(updatedTotalWon);
-      setTotalJackpotWon(
-        (prevTotalJackpotWon) => prevTotalJackpotWon + totalAmountWon,
-      );
-
+      setTotalJackpotWon((prevTotalJackpotWon) => prevTotalJackpotWon + totalAmountWon);
+  
       const transactionDetails = {
         transactionId,
         timestamp,
         ip,
         totalAmountWon,
+        betAmount,
         jackpotsWon,
+        contributions,
+        remainingAmountForPlayer,
         timeZone,
         playerId: selectedPlayer.idPlayer,
         username: selectedPlayer.username,
         nivel: selectedPlayer.nivel,
+        affectedJackpot: allowedJackpots[0],
+        totalBetPercentage: totalBetPercentage,
       };
-
+  
       logTransaction(transactionDetails);
-
-      // Actualizar balance en el backend
+  
       await updatePlayerBalance(selectedPlayer.idPlayer, updatedTotalWon);
-
-      if (totalAmountWon > 0) {
-        alert(`¡Has ganado un total de $${totalAmountWon}!`);
-      }
+  
+      alertMessage += `\nTotal que se devuelve al jugador: $${remainingAmountForPlayer}`;
+      alert(alertMessage);
+  
     } catch (error) {
-      console.error('Error al girar el jackpot:', error);
+      console.error('Error al realizar la apuesta:', error);
     }
   };
-
-  const resetJackpot = async () => {
-    try {
-      const jackpotKeys = Object.keys(jackpotAmounts);
-      const resetPromises = jackpotKeys.map((jackpot) =>
-        axios.post(
-          `https://jackpot-backend.vercel.app/api/resetJackpot/${encodeURIComponent(
-            jackpot,
-          )}`,
-        ),
-      );
-      await Promise.all(resetPromises);
-      fetchActiveJackpots();
-      setTotalWon(0);
-      setTotalJackpotWon(0);
-      alert('¡El jackpot ha sido reiniciado!');
-    } catch (error) {
-      console.error('Error al reiniciar el jackpot:', error);
-    }
+  
+  const handleBetAmountChange = (e) => {
+    const value = parseFloat(e.target.value);
+    setBetAmount(value > 0 ? value : 0);
   };
 
   return (
@@ -300,12 +275,17 @@ function App() {
           </div>
         )}
         <p>Total ganado: ${totalWon.toFixed(2)}</p>
-        <button className="btn-spin-jackpot" onClick={spinJackpot}>
-          Girar Jackpot
-        </button>
-        <button className="btn-reset-jackpot" onClick={resetJackpot}>
-          Reiniciar Jackpot
-        </button>
+        <div>
+          <input
+            type="number"
+            placeholder="Ingresa tu apuesta"
+            value={betAmount}
+            onChange={handleBetAmountChange}
+          />
+          <button className="btn-place-bet" onClick={placeBet}>
+            Realizar Apuesta
+          </button>
+        </div>
       </div>
       <audio src={jackpotSound} ref={audioRef} />
     </>
