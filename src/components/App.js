@@ -17,10 +17,12 @@ function App() {
   const [betAmount, setBetAmount] = useState(0);
   const audioRef = useRef(null);
   const [jackpotLevels, setJackpotLevels] = useState({});
+  const [availableLevels, setAvailableLevels] = useState([]); 
 
   useEffect(() => {
     fetchActiveJackpots();
     fetchPlayers();
+    fetchAvailableLevels();
   }, []);
 
   const fetchActiveJackpots = async () => {
@@ -64,6 +66,15 @@ function App() {
     } catch (error) {
       console.error('Error al obtener el balance del jugador:', error);
       setTotalWon(0);
+    }
+  };
+
+  const fetchAvailableLevels = async () => {
+    try {
+      const response = await axios.get('https://jackpot-backend.vercel.app/api/levels');
+      setAvailableLevels(response.data.map(level => level.nivel)); 
+    } catch (error) {
+      console.error('Error al obtener los niveles disponibles:', error);
     }
   };
 
@@ -132,32 +143,54 @@ function App() {
     }
   };
 
+  const createNewPlayer = async () => {
+    const idPlayer = uuidv4().slice(0, 6).toUpperCase();
+    const username = `user_${idPlayer}`;
+
+    const randomLevel = availableLevels[Math.floor(Math.random() * availableLevels.length)];
+
+    const newPlayer = {
+      idPlayer,
+      username,
+      nivel: randomLevel,
+      status: 'Active',
+      balance: 0,
+    };
+
+    try {
+      await axios.post('https://jackpot-backend.vercel.app/api/players', newPlayer);
+      setPlayers([...players, newPlayer]);
+      setSelectedPlayer(newPlayer);
+    } catch (error) {
+      console.error('Error al crear el nuevo jugador:', error);
+    }
+  };
+
   const placeBet = async () => {
     if (!selectedPlayer) {
-      alert('Por favor, inicia sesión antes de realizar una apuesta.');
-      return;
+      await createNewPlayer();
     }
-  
+
     if (betAmount <= 0) {
       alert('Por favor, ingresa un monto de apuesta válido.');
       return;
     }
-  
+
     const playerLevel = selectedPlayer.nivel;
     const allowedJackpots = Object.entries(jackpotLevels)
       .filter(([jackpotName, levels]) => levels.includes(playerLevel))
       .map(([jackpotName]) => jackpotName);
-  
+
     if (allowedJackpots.length === 0) {
       alert('Tu nivel no está autorizado para girar ninguno de los jackpots.');
       return;
     }
-  
+
     const transactionId = uuidv4();
     const timeZone = getUserTimeZone();
     const timestamp = moment().tz(timeZone).format('YYYY-MM-DD HH:mm:ss');
     const ip = await getIPAddress();
-  
+
     try {
       playJackpotSound();
       const jackpotPromises = allowedJackpots.map((jackpot) =>
@@ -166,32 +199,32 @@ function App() {
           { amount: betAmount, playerLevel }
         )
       );
-  
+
       const responses = await Promise.all(jackpotPromises);
-  
+
       let totalAmountWon = 0;
       const jackpotsWon = {};
       const contributions = {};
-      let totalContributions = 0;  
+      let totalContributions = 0;
       let totalBetPercentage = 0;
       let alertMessage = 'Resumen de la apuesta:\n';
-  
+
       responses.forEach((response, index) => {
         const jackpotName = allowedJackpots[index];
         const { amountWon, jackpotAmount, inJackpot, individualContribution, totalBetPercentage: jackpotBetPercentage } = response.data;
-  
+
         totalAmountWon += parseFloat(amountWon);
         jackpotsWon[jackpotName] = amountWon;
         contributions[jackpotName] = individualContribution;
         totalContributions += parseFloat(individualContribution);
-        totalBetPercentage += jackpotBetPercentage; 
-  
+        totalBetPercentage += jackpotBetPercentage;
+
         alertMessage += `Jackpot al que se le sumó un porcentaje de la apuesta: ${jackpotName}\n`;
         alertMessage += `Cantidad de Contribución: $${individualContribution}\n`;
         if (parseFloat(amountWon) > 0) {
           alertMessage += `¡Ganaste $${amountWon} en este jackpot!\n`;
         }
-  
+
         if (inJackpot) {
           setJackpotAmounts((prevAmounts) => ({
             ...prevAmounts,
@@ -199,12 +232,12 @@ function App() {
           }));
         }
       });
-  
-      const remainingAmountForPlayer = betAmount - totalContributions;  
+
+      const remainingAmountForPlayer = betAmount - totalContributions;
       const updatedTotalWon = totalWon + totalAmountWon;
       setTotalWon(updatedTotalWon);
       setTotalJackpotWon((prevTotalJackpotWon) => prevTotalJackpotWon + totalAmountWon);
-  
+
       const transactionDetails = {
         transactionId,
         timestamp,
@@ -221,19 +254,19 @@ function App() {
         affectedJackpot: allowedJackpots[0],
         totalBetPercentage: totalBetPercentage,
       };
-  
+
       logTransaction(transactionDetails);
-  
+
       await updatePlayerBalance(selectedPlayer.idPlayer, updatedTotalWon);
-  
-      alertMessage += `\nTotal que se devuelve al jugador: $${remainingAmountForPlayer}`;
+
+      alertMessage += `\nTotal que se atribuye al casino/maquina: $${remainingAmountForPlayer.toFixed(2)}`;
       alert(alertMessage);
-  
+
     } catch (error) {
       console.error('Error al realizar la apuesta:', error);
     }
   };
-  
+
   const handleBetAmountChange = (e) => {
     const value = parseFloat(e.target.value);
     setBetAmount(value > 0 ? value : 0);
@@ -274,7 +307,6 @@ function App() {
             )}
           </div>
         )}
-        <p>Total ganado: ${totalWon.toFixed(2)}</p>
         <div>
           <input
             type="number"
